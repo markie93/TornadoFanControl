@@ -1,17 +1,24 @@
 @echo off
+setlocal
 cd /d "%~dp0"
 
-echo [1/2] Building GUI (PyInstaller)...
-pyinstaller ui.spec --noconfirm
-if %errorlevel% neq 0 (
-    echo.
-    echo PyInstaller build FAILED.
-    pause
-    exit /b 1
-)
-echo.
+set MSBUILD="C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe"
 
-echo [2/2] Building installer (Inno Setup)...
+echo [1/3] Building C++ (Release x64)...
+%MSBUILD% "CPP\FanControl\FanControl.sln" /p:Configuration=Release /p:Platform=x64 /t:Build /nologo /verbosity:minimal
+if %errorlevel% neq 0 (
+    echo C++ build FAILED.
+    pause & exit /b 1
+)
+
+echo [2/3] Building GUI (PyInstaller)...
+python -m PyInstaller ui.spec --noconfirm
+if %errorlevel% neq 0 (
+    echo PyInstaller build FAILED.
+    pause & exit /b 1
+)
+
+echo [3/3] Building installer (Inno Setup)...
 set ISCC=
 for %%P in (
     "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
@@ -19,19 +26,17 @@ for %%P in (
 ) do if exist %%P set ISCC=%%~P
 
 if "%ISCC%"=="" (
-    echo ERROR: Inno Setup 6 not found. Install it from https://jrsoftware.org/isinfo.php
-    pause
-    exit /b 1
+    echo ERROR: Inno Setup 6 not found. Install from https://jrsoftware.org/isinfo.php
+    pause & exit /b 1
 )
 
 "%ISCC%" "dist\Inno_6.iss"
 if %errorlevel% neq 0 (
-    echo.
     echo Inno Setup build FAILED.
-    pause
-    exit /b 1
+    pause & exit /b 1
 )
 
 echo.
-echo Build complete: dist\TornadoFanControllerInstaller.exe
+echo Done. Installer: dist\TornadoFanControllerInstaller.exe
+endlocal
 pause

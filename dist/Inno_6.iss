@@ -10,7 +10,7 @@ Compression=lzma
 SolidCompression=yes
 
 [Files]
-Source: "..\CPP\FanControl\x64\Debug\FanControl.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\.\CPP\FanControl\x64\Release\FanControl.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "inpoutx64.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "fanctrl_settings.dat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "ui.exe"; DestDir: "{app}"; Flags: ignoreversion
