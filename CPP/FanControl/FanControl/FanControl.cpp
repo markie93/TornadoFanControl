@@ -69,6 +69,13 @@ struct SharedData
     std::atomic<int> gpu_fan_point_5;
 
     std::atomic<bool> write_sync;
+
+    // PID mode fields (appended for backward compat)
+    std::atomic<int> fan_ctrl_mode;   // 0 = curve, 1 = PID
+    std::atomic<int> cpu_target_temp; // PID target CPU temp (°C)
+    std::atomic<int> gpu_target_temp; // PID target GPU temp (°C)
+    std::atomic<int> cpu_min_fan_pid; // minimum CPU fan % in PID mode
+    std::atomic<int> gpu_min_fan_pid; // minimum GPU fan % in PID mode
 };
 
 // Global variables for cleanup
@@ -224,6 +231,56 @@ private:
     double lastTemp;
 };
 
+// PID fan controller — drives fan speed to reach a target temperature.
+// Gains are tuned for the PHN16-72; adjust Kp/Ki/Kd here if needed.
+class PidFanController
+{
+public:
+    static constexpr double Kp = 2.0;
+    static constexpr double Ki = 0.05;
+    static constexpr double Kd = 1.0;
+
+    PidFanController() : integral(0.0), prevError(0.0), initialized(false) {}
+
+    // Returns fan % clamped to [minFan, 100].
+    // Call once per control loop tick (~1 s).
+    int update(double currentTemp, double targetTemp, int minFan)
+    {
+        double error = currentTemp - targetTemp; // positive = too hot
+
+        if (!initialized) {
+            prevError = error;
+            initialized = true;
+        }
+
+        double derivative = error - prevError; // derivative on measurement
+        prevError = error;
+
+        integral += error;
+
+        double output = Kp * error + Ki * integral + Kd * derivative;
+        int fanPct = static_cast<int>(output);
+
+        // Clamp output
+        if (fanPct < minFan)  { fanPct = minFan;  integral -= error; } // anti-windup
+        if (fanPct > 100)     { fanPct = 100;      integral -= error; }
+
+        return fanPct;
+    }
+
+    void reset()
+    {
+        integral    = 0.0;
+        prevError   = 0.0;
+        initialized = false;
+    }
+
+private:
+    double integral;
+    double prevError;
+    bool   initialized;
+};
+
 void set_cpu_fan_manual(int percent)
 {
     ec_write(cpu_fan_mode_reg, cpu_fan_mode_manual);
@@ -315,7 +372,12 @@ void saveSharedDataToFile(SharedData* sharedData, const std::string& filename)
     int gpu_fan_point_3 = sharedData->gpu_fan_point_3.load();
     int gpu_fan_point_4 = sharedData->gpu_fan_point_4.load();
     int gpu_fan_point_5 = sharedData->gpu_fan_point_5.load();
-    
+    int fan_ctrl_mode   = sharedData->fan_ctrl_mode.load();
+    int cpu_target_temp = sharedData->cpu_target_temp.load();
+    int gpu_target_temp = sharedData->gpu_target_temp.load();
+    int cpu_min_fan_pid = sharedData->cpu_min_fan_pid.load();
+    int gpu_min_fan_pid = sharedData->gpu_min_fan_pid.load();
+
     file.write(reinterpret_cast<const char*>(&cpuTemp), sizeof(cpuTemp));
     file.write(reinterpret_cast<const char*>(&gpuTemp), sizeof(gpuTemp));
     file.write(reinterpret_cast<const char*>(&cpuFanSpeed), sizeof(cpuFanSpeed));
@@ -338,6 +400,11 @@ void saveSharedDataToFile(SharedData* sharedData, const std::string& filename)
     file.write(reinterpret_cast<const char*>(&gpu_fan_point_3), sizeof(gpu_fan_point_3));
     file.write(reinterpret_cast<const char*>(&gpu_fan_point_4), sizeof(gpu_fan_point_4));
     file.write(reinterpret_cast<const char*>(&gpu_fan_point_5), sizeof(gpu_fan_point_5));
+    file.write(reinterpret_cast<const char*>(&fan_ctrl_mode),   sizeof(fan_ctrl_mode));
+    file.write(reinterpret_cast<const char*>(&cpu_target_temp), sizeof(cpu_target_temp));
+    file.write(reinterpret_cast<const char*>(&gpu_target_temp), sizeof(gpu_target_temp));
+    file.write(reinterpret_cast<const char*>(&cpu_min_fan_pid), sizeof(cpu_min_fan_pid));
+    file.write(reinterpret_cast<const char*>(&gpu_min_fan_pid), sizeof(gpu_min_fan_pid));
 }
 
 void loadSharedDataFromFile(SharedData* sharedData, const std::string& filename) 
@@ -368,6 +435,11 @@ void loadSharedDataFromFile(SharedData* sharedData, const std::string& filename)
         sharedData->gpu_fan_point_4.store(30);
         sharedData->gpu_fan_point_5.store(100);
         sharedData->write_sync.store(false);
+        sharedData->fan_ctrl_mode.store(0);
+        sharedData->cpu_target_temp.store(70);
+        sharedData->gpu_target_temp.store(65);
+        sharedData->cpu_min_fan_pid.store(10);
+        sharedData->gpu_min_fan_pid.store(10);
         
         // Save default values to file
         saveSharedDataToFile(sharedData, filename);
@@ -430,6 +502,21 @@ void loadSharedDataFromFile(SharedData* sharedData, const std::string& filename)
     sharedData->gpu_fan_point_4.store(gpu_fan_point_4);
     sharedData->gpu_fan_point_5.store(gpu_fan_point_5);
     sharedData->write_sync.store(false);
+
+    // Load PID fields if present (backward compat: older files may not have them)
+    int fan_ctrl_mode = 0, cpu_target_temp = 70, gpu_target_temp = 65;
+    int cpu_min_fan_pid = 10, gpu_min_fan_pid = 10;
+    if (file.read(reinterpret_cast<char*>(&fan_ctrl_mode),   sizeof(fan_ctrl_mode))   &&
+        file.read(reinterpret_cast<char*>(&cpu_target_temp), sizeof(cpu_target_temp)) &&
+        file.read(reinterpret_cast<char*>(&gpu_target_temp), sizeof(gpu_target_temp)) &&
+        file.read(reinterpret_cast<char*>(&cpu_min_fan_pid), sizeof(cpu_min_fan_pid)) &&
+        file.read(reinterpret_cast<char*>(&gpu_min_fan_pid), sizeof(gpu_min_fan_pid)))
+    { /* loaded from file */ }
+    sharedData->fan_ctrl_mode.store(fan_ctrl_mode);
+    sharedData->cpu_target_temp.store(cpu_target_temp);
+    sharedData->gpu_target_temp.store(gpu_target_temp);
+    sharedData->cpu_min_fan_pid.store(cpu_min_fan_pid);
+    sharedData->gpu_min_fan_pid.store(gpu_min_fan_pid);
 }
 
 std::string getAppDataPath() {
@@ -560,6 +647,9 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
     cpuPID.syncToSharedData(g_sharedData, true);
     gpuPID.syncToSharedData(g_sharedData, false);
 
+    PidFanController cpuPid;
+    PidFanController gpuPid;
+
     LowPassFilter cpuFilter(0.1);
     LowPassFilter gpuFilter(0.1);
 
@@ -586,8 +676,23 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
             else gpuTemp = 100;
         }
 
-        int cpuFan = cpuPID.update(cpuTemp);
-        int gpuFan = gpuPID.update(gpuTemp);
+        int cpuFan, gpuFan;
+        if (g_sharedData->fan_ctrl_mode.load() == 1)
+        {
+            // PID mode: drive temps toward target
+            int cpuTarget  = g_sharedData->cpu_target_temp.load();
+            int gpuTarget  = g_sharedData->gpu_target_temp.load();
+            int cpuMinPid  = g_sharedData->cpu_min_fan_pid.load();
+            int gpuMinPid  = g_sharedData->gpu_min_fan_pid.load();
+            cpuFan = cpuPid.update(cpuTemp, cpuTarget, cpuMinPid);
+            gpuFan = gpuPid.update(gpuTemp, gpuTarget, gpuMinPid);
+        }
+        else
+        {
+            // Curve mode
+            cpuFan = cpuPID.update(cpuTemp);
+            gpuFan = gpuPID.update(gpuTemp);
+        }
 
         if (cpuFan > gpuFan + 10) gpuFan = cpuFan - 10;
         else if (gpuFan > cpuFan + 10) cpuFan = gpuFan - 10;
@@ -615,6 +720,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
         {
             cpuPID.syncFromSharedData(g_sharedData, true);
             gpuPID.syncFromSharedData(g_sharedData, false);
+            cpuPid.reset();
+            gpuPid.reset();
             g_sharedData->write_sync.store(false);
             
             // Save settings when they change - use AppData path
