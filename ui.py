@@ -110,6 +110,7 @@ class FanControlGUI:
         self.dragging = None
         self.last_data_update = 0.0
         self.running = True
+        self._after_id = None
 
         # History buffer  (elapsed_s, cpu_temp, gpu_temp, cpu_fan, gpu_fan)
         self._history = collections.deque(maxlen=self.HISTORY_SAMPLES)
@@ -451,7 +452,7 @@ class FanControlGUI:
             return
 
         interval = 16 if self.dragging is not None else 100
-        self.root.after(interval, self.update_ui)
+        self._after_id = self.root.after(interval, self.update_ui)
 
     def _update_curves(self):
         if self.edit_data is None:
@@ -589,6 +590,9 @@ class FanControlGUI:
 
     def on_closing(self):
         self.running = False
+        if self._after_id is not None:
+            self.root.after_cancel(self._after_id)
+            self._after_id = None
         try:
             if self.edit_data is not None:
                 self.edit_data.write_sync = True
@@ -596,7 +600,12 @@ class FanControlGUI:
         except Exception as e:
             print(f"Error saving on close: {e}")
         finally:
-            self.root.quit()
+            try:
+                import matplotlib.pyplot as plt
+                plt.close("all")
+            except Exception:
+                pass
+            self.root.destroy()
 
 
 if __name__ == "__main__":
