@@ -1,2 +1,47 @@
+# ── Python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
 build/
+.env
+.venv/
+venv/
+
+# ── C++ / Visual Studio ──────────────────────────────────────────────────
+*.obj
+*.ilk
+*.pdb
+*.idb
+*.iobj
+*.ipdb
+*.log
+*.tlog
+*.recipe
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.VC.opendb
+.vs/
 CPP/FanControl/.vs/
+**/x64/
+**/Debug/
+**/Release/
+*.ncb
+*.opensdf
+*.sdf
+
+# ── Binaries ─────────────────────────────────────────────────────────────
+*.exe
+# Uncomment if you do NOT store inpoutx64.dll in the repo:
+# *.dll
+
+# ── OS ───────────────────────────────────────────────────────────────────
+Thumbs.db
+Desktop.ini
+.DS_Store
+
